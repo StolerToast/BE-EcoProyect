@@ -1,0 +1,18 @@
+﻿{
+  "SqlServer": {
+    "Server": "DESKTOP-J3BCQOG\\SQLEXPRESS",
+    "Database": "callcenter2025"
+  },
+  "Paths": {
+    "Domain": "http://localhost/callcenter2025/",
+    "Photos": {
+      "Users": "photos/users/",
+      "Agents": "photos/agents/"
+    }
+  },
+  "MongoDB": {
+    "ConnectionString": "mongodb+srv://ToastStoler:7KblssL26USyiXPk@cluster0.c9b9gst.mongodb.net/",
+    "Database": "smartTest"
+  }
+}
+
