@@ -13,6 +13,12 @@
   "MongoDB": {
     "ConnectionString": "mongodb+srv://ToastStoler:7KblssL26USyiXPk@cluster0.c9b9gst.mongodb.net/",
     "Database": "smartTest"
+  },
+  "PostgreSql": {
+    "Server": "localhost",
+    "Port": 5432,
+    "Database": "ecotrack_users",
+    "User": "ecoadmin",
+    "Password": "12345"
   }
 }
-
