@@ -1,4 +1,4 @@
-﻿using Npgsql; // Paquete NuGet: Npgsql
+﻿using Npgsql;
 using smartbin.Config;
 using System;
 using System.Data;

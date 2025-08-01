@@ -107,6 +107,40 @@ namespace smartbin.Controllers
                 });
             }
         }
+        [HttpGet("{userId}")]
+        public ActionResult GetUserCombined(int userId)
+        {
+            try
+            {
+                // 1. Obtener datos de SQL_users
+                var sqlUsersCollection = MongoDbConnection.GetCollection<BsonDocument>("SQL_users");
+                var sqlUser = sqlUsersCollection.Find(Builders<BsonDocument>.Filter.Eq("user_id", userId)).FirstOrDefault();
+
+                if (sqlUser == null)
+                    return NotFound(new { status = 1, message = "Usuario no encontrado en SQL_users" });
+
+                // 2. Obtener datos de user_sync
+                var userSyncCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+                var userSync = userSyncCollection.Find(Builders<BsonDocument>.Filter.Eq("sql_user_id", userId)).FirstOrDefault();
+
+                if (userSync == null)
+                    return NotFound(new { status = 1, message = "Usuario no encontrado en user_sync" });
+
+                // 3. Combinar datos
+                var response = new UserCombinedResponse
+                {
+                    Nombre = sqlUser.GetValue("nombre", "").AsString,
+                    Username = sqlUser.GetValue("username", "").AsString,
+                    Password = sqlUser.GetValue("contrasena", "").AsString
+                };
+
+                return Ok(new { status = 0, data = response });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 2, message = $"Error: {ex.Message}" });
+            }
+        }
 
 
         // Modelo para el request
@@ -117,6 +151,22 @@ namespace smartbin.Controllers
             public string Apellido { get; set; }
             public string Contrasena { get; set; }
             public string Email { get; set; }
+        }
+        // Modelo para GET (respuesta combinada)
+        public class UserCombinedResponse
+        {
+            public string Nombre { get; set; }
+            public string Username { get; set; }
+            public string Password { get; set; }
+        }
+
+        // Modelo para PUT (actualización)
+        public class UserUpdateRequest
+        {
+            public string Nombre { get; set; }
+            public string Username { get; set; }
+            public string Password { get; set; }
+            public string Email { get; set; } // Requerido para sincronización
         }
     }
 }
