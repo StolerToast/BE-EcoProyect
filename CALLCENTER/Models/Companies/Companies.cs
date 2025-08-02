@@ -90,10 +90,26 @@ namespace smartbin.Models.Companies
         // Método para insertar (híbrido)
         public static dynamic Insert(PostCompanies nuevaCompanies)
         {
-            // Generar ID único
+            // Generar ID manualmente (ya que MongoDB es el sistema de referencia)
             string companyId = $"COMP-{DateTime.UtcNow:yyyyMMddHHmmss}";
 
-            // 1. Insertar en MongoDB
+            // 1. Insertar en PostgreSQL (sin depender de SERIAL)
+            string pgQuery = @"
+        INSERT INTO companies 
+            (mongo_company_id, name, email, phone, address, active, created_at)
+        VALUES 
+            (@mongoId, @nombre, @email, @telefono, @direccion, true, CURRENT_TIMESTAMP)";
+
+            var pgCommand = new NpgsqlCommand(pgQuery);
+            pgCommand.Parameters.AddWithValue("@mongoId", companyId);
+            pgCommand.Parameters.AddWithValue("@nombre", nuevaCompanies.Nombre);
+            pgCommand.Parameters.AddWithValue("@email", nuevaCompanies.Email);
+            pgCommand.Parameters.AddWithValue("@telefono", nuevaCompanies.Telefono);
+            pgCommand.Parameters.AddWithValue("@direccion", nuevaCompanies.Direccion);
+
+            PostgreSqlConnection.ExecuteNonQuery(pgCommand);
+
+            // 2. Insertar en MongoDB (igual que antes)
             var mongoEmpresa = new Companies
             {
                 CompanyId = companyId,
@@ -111,25 +127,12 @@ namespace smartbin.Models.Companies
                     Email = nuevaCompanies.Email,
                     Telefono = nuevaCompanies.Telefono,
                     Direccion = nuevaCompanies.Direccion
-                }
+                },
+                Activa = true,
+                FechaCreacion = DateTime.UtcNow
             };
 
-            var mongoCollection = MongoDbConnection.GetCollection<Companies>("companies");
-            mongoCollection.InsertOne(mongoEmpresa);
-
-            // 2. Insertar en PostgreSQL
-            string pgQuery = @"
-                INSERT INTO companies (mongo_company_id, name, email, phone, address)
-                VALUES (@mongoId, @nombre, @email, @telefono, @direccion)";
-
-            var pgCommand = new NpgsqlCommand(pgQuery);
-            pgCommand.Parameters.AddWithValue("@mongoId", companyId);
-            pgCommand.Parameters.AddWithValue("@nombre", nuevaCompanies.Nombre);
-            pgCommand.Parameters.AddWithValue("@email", nuevaCompanies.Email);
-            pgCommand.Parameters.AddWithValue("@telefono", nuevaCompanies.Telefono);
-            pgCommand.Parameters.AddWithValue("@direccion", nuevaCompanies.Direccion);
-
-            PostgreSqlConnection.ExecuteNonQuery(pgCommand);
+            MongoDbConnection.GetCollection<Companies>("companies").InsertOne(mongoEmpresa);
 
             return new { companyId };
         }
