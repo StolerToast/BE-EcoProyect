@@ -26,6 +26,14 @@ namespace smartbin.Controllers
             return Ok(list);
         }
 
+        [HttpGet("resolved")]
+        public ActionResult GetResolved()
+        {
+            var db = MongoDbConnection.GetDatabase();
+            var list = Incident.GetSolvedIncidents(db).ConvertAll(doc => doc.ToDictionary());
+            return Ok(list);
+        }
+
         [HttpGet("graphic")]
         public ActionResult GetGraphic()
         {
