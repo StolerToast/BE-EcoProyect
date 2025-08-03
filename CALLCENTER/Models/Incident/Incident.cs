@@ -128,7 +128,7 @@ namespace smartbin.Models.Incident
             var pipeline = new[]
             {
         // Filtro inicial (solo complaints/damage)
-        new BsonDocument("$match", new BsonDocument("type", new BsonDocument("$in", new BsonArray { "complaint" }))),
+        new BsonDocument("$match", new BsonDocument("status", new BsonDocument("$in", new BsonArray { "resolved" }))),
 
         // Lookup para datos del empleado (SQL_users)
         new BsonDocument("$lookup", new BsonDocument

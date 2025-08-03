@@ -51,52 +51,52 @@ namespace smartbin.Controllers
         {
             try
             {
-                // 1. Get data from SQL_users
-                var sqlUsersCollection = MongoDbConnection.GetCollection<BsonDocument>("SQL_users");
-                var sqlUser = sqlUsersCollection.Find(Builders<BsonDocument>.Filter.Eq("user_id", 1)).FirstOrDefault();
+                // --- 1. Obtener datos de PostgreSQL (users) ---
+                var pgCommand = new NpgsqlCommand(
+                    @"SELECT username, contrasena_hash 
+              FROM users 
+              WHERE user_id = 1",  // ID fijo del admin
+                    PostgreSqlConnection.GetConnection()
+                );
 
-                // 2. Get data from user_sync
-                var userSyncCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
-                var userSync = userSyncCollection.Find(Builders<BsonDocument>.Filter.Eq("sql_user_id", 1)).FirstOrDefault();
-
-                if (sqlUser == null || userSync == null)
+                using (var pgReader = pgCommand.ExecuteReader())
                 {
-                    return NotFound(new { status = 1, message = "Usuario admin no encontrado en una o ambas colecciones" });
+                    if (!pgReader.Read())
+                    {
+                        return NotFound(new { status = 1, message = "Usuario admin no encontrado en PostgreSQL" });
+                    }
+
+                    string pgUsername = pgReader.GetString(0);
+                    string pgPasswordHash = pgReader.GetString(1);
+
+                    // --- 2. Obtener datos de MongoDB (user_sync) ---
+                    var mongoCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+                    var mongoAdmin = mongoCollection.Find(Builders<BsonDocument>.Filter.Eq("sql_user_id", 1)).FirstOrDefault();
+
+                    if (mongoAdmin == null)
+                    {
+                        return NotFound(new { status = 1, message = "Usuario admin no encontrado en MongoDB" });
+                    }
+
+                    // --- 3. Validar sincronización básica ---
+                    bool isSynced = mongoAdmin["email"].AsString == pgUsername;  // Ejemplo: validar email = username (ajusta según tu lógica)
+
+                    return Ok(new
+                    {
+                        status = 0,
+                        postgres_data = new
+                        {
+                            username = pgUsername,
+                            contrasena_hash = pgPasswordHash
+                        },
+                        is_synced = isSynced,
+                        last_sync = mongoAdmin["last_sync"].ToUniversalTime()
+                    });
                 }
-
-                // 3. Compare key data
-                bool isEmailConsistent = sqlUser["email"].AsString == userSync["email"].AsString;
-                bool isRoleConsistent = sqlUser["role"].AsString == userSync["role"].AsString;
-
-                return Ok(new
-                {
-                    status = 0,
-                    sql_users_data = new
-                    {
-                        username = sqlUser["username"].AsString,
-                        nombre = sqlUser["nombre"].AsString,
-                        apellido = sqlUser["apellido"].AsString,
-                        email = sqlUser["email"].AsString,
-                        role = sqlUser["role"].AsString
-                    },
-                    user_sync_data = new
-                    {
-                        email = userSync["email"].AsString,
-                        role = userSync["role"].AsString,
-                        last_sync = userSync["last_sync"].ToUniversalTime()
-                    },
-                    is_consistent = isEmailConsistent && isRoleConsistent,
-                    inconsistencies = !isEmailConsistent ? "Email no coincide" :
-                                     !isRoleConsistent ? "Rol no coincide" : "Ninguna"
-                });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new
-                {
-                    status = 1,
-                    message = $"Error al validar: {ex.Message}"
-                });
+                return StatusCode(500, new { status = 2, message = $"Error: {ex.Message}" });
             }
         }
 
