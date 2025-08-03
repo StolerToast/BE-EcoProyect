@@ -201,6 +201,70 @@ namespace smartbin.Controllers
             }
         }
 
+        [HttpPost("CreateCollectorUser")]
+        public ActionResult CreateCollectorUser([FromBody] CreateCollectorRequest request)
+        {
+            using (var pgConnection = PostgreSqlConnection.GetConnection())
+            using (var pgTransaction = pgConnection.BeginTransaction())
+            {
+                try
+                {
+                    // --- 1. Insertar en PostgreSQL (users) ---
+                    var pgCommand = new NpgsqlCommand(
+                        @"INSERT INTO users 
+                  (username, nombre, apellido, email, contrasena_hash, role, telefono, active, created_at)
+                  VALUES 
+                  (@username, @nombre, @apellido, @email, @contrasenaHash, 'collector', @telefono, true, CURRENT_TIMESTAMP)
+                  RETURNING user_id;",
+                        pgConnection,
+                        pgTransaction
+                    );
+
+                    pgCommand.Parameters.AddWithValue("@username", request.Username);
+                    pgCommand.Parameters.AddWithValue("@nombre", request.Nombre);
+                    pgCommand.Parameters.AddWithValue("@apellido", request.Apellido);
+                    pgCommand.Parameters.AddWithValue("@email", request.Email);
+                    pgCommand.Parameters.AddWithValue("@contrasenaHash", BCrypt.Net.BCrypt.HashPassword(request.Contrasena));
+                    pgCommand.Parameters.AddWithValue("@telefono", request.Telefono ?? (object)DBNull.Value);
+
+                    int newCollectorId = (int)pgCommand.ExecuteScalar();
+
+                    // --- 2. Insertar en MongoDB (user_sync) ---
+                    var mongoUserCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+                    var newUserSync = new BsonDocument
+            {
+                { "sql_user_id", newCollectorId },
+                { "email", request.Email },
+                { "role", "collector" },
+                { "active", true },
+                { "last_sync", DateTime.UtcNow }
+            };
+                    mongoUserCollection.InsertOne(newUserSync);
+
+                    // --- 3. Crear registro en MongoDB (assignments) ---
+                    var mongoAssignmentCollection = MongoDbConnection.GetCollection<BsonDocument>("assignments");
+                    var newAssignment = new BsonDocument
+            {
+                { "assignment_id", $"ASSIGN-{newCollectorId}" },
+                { "collector_id", newCollectorId.ToString() },
+                { "admin_id", "1" },  // ID fijo del admin
+                { "companies", new BsonArray() },  // Array vacío
+                { "status", "active" },
+                { "assigned_at", DateTime.UtcNow }
+            };
+                    mongoAssignmentCollection.InsertOne(newAssignment);
+
+                    pgTransaction.Commit();
+                    return Ok(new { status = 0, message = "Usuario recolector creado", user_id = newCollectorId });
+                }
+                catch (Exception ex)
+                {
+                    pgTransaction.Rollback();
+                    return StatusCode(500, new { status = 2, message = $"Error: {ex.Message}" });
+                }
+            }
+        }
+
         // Método auxiliar para obtener company_id desde company_mongo_id
         private int? GetCompanyIdByMongoId(string mongoCompanyId)
         {
@@ -252,6 +316,16 @@ namespace smartbin.Controllers
             public string Contrasena { get; set; }
             public string Telefono { get; set; }
             public string CompanyMongoId { get; set; }  // ID de MongoDB (COMP-001)
+        }
+        public class CreateCollectorRequest
+        {
+            public string Username { get; set; }
+            public string Nombre { get; set; }
+            public string Apellido { get; set; }
+            public string Email { get; set; }
+            public string Contrasena { get; set; }
+            public string Telefono { get; set; }
+            // No incluir company_mongo_id
         }
     }
 }
