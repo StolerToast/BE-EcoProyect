@@ -75,34 +75,51 @@ namespace smartbin.Models.Incident
             return collection.Find(filter).ToList();
         }
 
-        // Consulta SpecificIncidents (con lookup y proyección)
+        // Método actualizado en Incident.cs (dentro de la clase Incident)
         public static List<BsonDocument> GetSpecificIncidents(IMongoDatabase db)
         {
             var collection = db.GetCollection<BsonDocument>("incidents");
             var pipeline = new[]
             {
-                new BsonDocument("$match", new BsonDocument("type", new BsonDocument("$in", new BsonArray { "complaint", "damage" }))),                
-                new BsonDocument("$lookup", new BsonDocument
-                {
-                    { "from", "SQL_users" },
-                    { "localField", "reported_by" },
-                    { "foreignField", "user_id" },
-                    { "as", "empleado" }
-                }),
-                new BsonDocument("$unwind", "$empleado"),
-                new BsonDocument("$project", new BsonDocument
-                {
-                    { "_id", 0 },
-                    { "container_id", 1 },
-                    { "descripcion", "$description" },
-                    { "fecha", "$created_at" },
-                    { "imagen", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
-                    { "nombre_empleado", new BsonDocument("$concat", new BsonArray { "$empleado.nombre", " ", "$empleado.apellido" }) }
-                })
-            };
+        // Filtro inicial (solo complaints/damage)
+        new BsonDocument("$match", new BsonDocument("type", new BsonDocument("$in", new BsonArray { "complaint", "damage" }))),
+
+        // Lookup para datos del empleado (SQL_users)
+        new BsonDocument("$lookup", new BsonDocument
+        {
+            { "from", "SQL_users" },
+            { "localField", "reported_by" },
+            { "foreignField", "user_id" },
+            { "as", "empleado" }
+        }),
+        new BsonDocument("$unwind", "$empleado"),
+
+        // Lookup para datos de la compañía (companies)
+        new BsonDocument("$lookup", new BsonDocument
+        {
+            { "from", "companies" },
+            { "localField", "company_id" },
+            { "foreignField", "company_id" },
+            { "as", "company_info" }
+        }),
+        new BsonDocument("$unwind", "$company_info"),
+
+        // Proyección final (campos a devolver)
+        new BsonDocument("$project", new BsonDocument
+        {
+            { "_id", 0 },
+            { "incident_id", 1 },               // Nuevo campo
+            { "type", 1 },                     // Nuevo campo
+            { "container_id", 1 },
+            { "descripcion", "$description" },
+            { "fecha", "$created_at" },
+            { "imagen", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
+            { "nombre_empleado", new BsonDocument("$concat", new BsonArray { "$empleado.nombre", " ", "$empleado.apellido" }) },
+            { "company_name", "$company_info.name" }  // Nombre en lugar del ID
+        })
+    };
             return collection.Aggregate<BsonDocument>(pipeline).ToList();
         }
-
         // Consulta GraphicIncident (agrupación por mes/año)
         public static List<BsonDocument> GetGraphicIncident(IMongoDatabase db)
         {
@@ -151,6 +168,25 @@ namespace smartbin.Models.Incident
             };
             var sort = Builders<BsonDocument>.Sort.Descending("created_at");
             return collection.Find(filter).Project(projection).Sort(sort).ToList();
+        }
+
+        // Actualizar incidente
+        // Dentro de la clase Incident (Incident.cs)
+        public static bool ResolveIncident(string incidentId, string resolutionNotes = null)
+        {
+            var collection = MongoDbConnection.GetCollection<Incident>("incidents");
+            var filter = Builders<Incident>.Filter.Eq(x => x.IncidentId, incidentId);
+            var update = Builders<Incident>.Update
+                .Set(x => x.Status, "resolved")
+                .Set(x => x.ResolvedAt, DateTime.UtcNow);
+
+            if (!string.IsNullOrEmpty(resolutionNotes))
+            {
+                update = update.Set(x => x.ResolutionNotes, resolutionNotes);
+            }
+
+            var result = collection.UpdateOne(filter, update);
+            return result.ModifiedCount > 0;
         }
     }
 }

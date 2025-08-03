@@ -42,6 +42,33 @@ namespace smartbin.Controllers
             return Ok(list);
         }
 
+        // Dentro de IncidentController.cs
+        [HttpPatch("resolve/{incident_id}")]
+        public ActionResult ResolveIncident(string incident_id, [FromBody] ResolutionRequest request)
+        {
+            try
+            {
+                var resolved = Incident.ResolveIncident(incident_id, request?.ResolutionNotes);
+
+                if (!resolved)
+                {
+                    return NotFound(new { status = 1, message = "Incidente no encontrado o ya resuelto." });
+                }
+
+                return Ok(new { status = 0, message = "Incidente marcado como resuelto." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 2, message = $"Error interno: {ex.Message}" });
+            }
+        }
+
+        // Clase auxiliar para el cuerpo de la solicitud (opcional)
+        public class ResolutionRequest
+        {
+            public string ResolutionNotes { get; set; }
+        }
+
         [HttpPost]
         public ActionResult Insert([FromBody] PostIncident newIncident)
         {
