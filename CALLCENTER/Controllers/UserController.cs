@@ -1,8 +1,11 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using BCrypt.Net;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Npgsql;
 using smartbin.DataAccess;
+using smartbin.Models.User;
 using System.Data;
 
 namespace smartbin.Controllers
@@ -11,59 +14,48 @@ namespace smartbin.Controllers
     [ApiController]
     public class UserController : ControllerBase
     {
-        [HttpPut("admin/update")]
-        public ActionResult UpdateAdminUser([FromBody] AdminUpdateRequest request)
+        [HttpPut("update/{userId}")]
+        public ActionResult UpdateUser(
+    int userId,
+    [FromBody] UserUpdateRequest request,
+    [FromServices] IAuthorizationService authService) // Opcional: para validar permisos
         {
+            // Opcional: Validar que el usuario autenticado es el mismo que se quiere modificar
+            // var currentUserId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier));
+            // if (userId != currentUserId) return Forbid();
+
             try
             {
-                // --- 1. Actualizar en MongoDB (SQL_users) ---
-                var mongoCollection = MongoDbConnection.GetCollection<BsonDocument>("SQL_users");
-                var filter = Builders<BsonDocument>.Filter.Eq("user_id", 1); // ID del admin
-                var update = Builders<BsonDocument>.Update
-                    .Set("username", request.Username)
-                    .Set("nombre", request.Nombre)
-                    .Set("apellido", request.Apellido)
-                    .Set("contrasena", request.Contrasena)
-                    .Set("email", request.Email);
+                string hashedPassword = BCrypt.Net.BCrypt.HashPassword(request.Password);
+                bool success = smartbin.Models.User.User.UpdateUserWithSync(
+                    userId,
+                    request.Username,
+                    request.Nombre,
+                    request.Apellido,
+                    request.Email,
+                    hashedPassword
+                );
 
-                var mongoResult = mongoCollection.UpdateOne(filter, update);
-
-                // --- 2. Actualizar en MongoDB (user_sync) ---
-                var syncCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
-                var syncFilter = Builders<BsonDocument>.Filter.Eq("sql_user_id", 1);
-                var syncUpdate = Builders<BsonDocument>.Update
-                    .Set("email", request.Email)
-                    .Set("last_sync", DateTime.UtcNow);
-
-                var syncResult = syncCollection.UpdateOne(syncFilter, syncUpdate);
-
-                return Ok(new
-                {
-                    status = 0,
-                    message = "Datos del admin actualizados en ambas colecciones",
-                    sql_users_updated = mongoResult.ModifiedCount,
-                    user_sync_updated = syncResult.ModifiedCount
-                });
+                return success
+                    ? Ok(new { status = 0, message = "Usuario actualizado" })
+                    : NotFound(new { status = 1, message = "Usuario no encontrado" });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new
-                {
-                    status = 1,
-                    message = $"Error: {ex.Message}"
-                });
+                return StatusCode(500, new { status = 2, message = ex.Message });
             }
         }
+
         [HttpGet("admin/validate")]
         public ActionResult ValidateAdminData()
         {
             try
             {
-                // --- 1. Obtener datos de SQL_users ---
+                // 1. Get data from SQL_users
                 var sqlUsersCollection = MongoDbConnection.GetCollection<BsonDocument>("SQL_users");
                 var sqlUser = sqlUsersCollection.Find(Builders<BsonDocument>.Filter.Eq("user_id", 1)).FirstOrDefault();
 
-                // --- 2. Obtener datos de user_sync ---
+                // 2. Get data from user_sync
                 var userSyncCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
                 var userSync = userSyncCollection.Find(Builders<BsonDocument>.Filter.Eq("sql_user_id", 1)).FirstOrDefault();
 
@@ -72,7 +64,7 @@ namespace smartbin.Controllers
                     return NotFound(new { status = 1, message = "Usuario admin no encontrado en una o ambas colecciones" });
                 }
 
-                // --- 3. Comparar datos clave ---
+                // 3. Compare key data
                 bool isEmailConsistent = sqlUser["email"].AsString == userSync["email"].AsString;
                 bool isRoleConsistent = sqlUser["role"].AsString == userSync["role"].AsString;
 
@@ -81,16 +73,16 @@ namespace smartbin.Controllers
                     status = 0,
                     sql_users_data = new
                     {
-                        BsonValue = sqlUser["username"],
-                        BsonValue1 = sqlUser["nombre"],
-                        BsonValue2 = sqlUser["apellido"],
-                        BsonValue3 = sqlUser["email"],
-                        BsonValue4 = sqlUser["role"]
+                        username = sqlUser["username"].AsString,
+                        nombre = sqlUser["nombre"].AsString,
+                        apellido = sqlUser["apellido"].AsString,
+                        email = sqlUser["email"].AsString,
+                        role = sqlUser["role"].AsString
                     },
                     user_sync_data = new
                     {
-                        BsonValue = userSync["email"],
-                        BsonValue1 = userSync["role"],
+                        email = userSync["email"].AsString,
+                        role = userSync["role"].AsString,
                         last_sync = userSync["last_sync"].ToUniversalTime()
                     },
                     is_consistent = isEmailConsistent && isRoleConsistent,
@@ -107,34 +99,41 @@ namespace smartbin.Controllers
                 });
             }
         }
+
         [HttpGet("{userId}")]
         public ActionResult GetUserCombined(int userId)
         {
             try
             {
-                // 1. Obtener datos de SQL_users
-                var sqlUsersCollection = MongoDbConnection.GetCollection<BsonDocument>("SQL_users");
-                var sqlUser = sqlUsersCollection.Find(Builders<BsonDocument>.Filter.Eq("user_id", userId)).FirstOrDefault();
+                // 1. Obtener datos de PostgreSQL
+                var pgCommand = new NpgsqlCommand(
+                    @"SELECT user_id, username, nombre, apellido, email, role 
+              FROM users 
+              WHERE user_id = @userId",
+                    PostgreSqlConnection.GetConnection()
+                );
+                pgCommand.Parameters.AddWithValue("@userId", userId);
 
-                if (sqlUser == null)
-                    return NotFound(new { status = 1, message = "Usuario no encontrado en SQL_users" });
-
-                // 2. Obtener datos de user_sync
-                var userSyncCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
-                var userSync = userSyncCollection.Find(Builders<BsonDocument>.Filter.Eq("sql_user_id", userId)).FirstOrDefault();
-
-                if (userSync == null)
-                    return NotFound(new { status = 1, message = "Usuario no encontrado en user_sync" });
-
-                // 3. Combinar datos
-                var response = new UserCombinedResponse
+                using (var reader = pgCommand.ExecuteReader())
                 {
-                    Nombre = sqlUser.GetValue("nombre", "").AsString,
-                    Username = sqlUser.GetValue("username", "").AsString,
-                    Password = sqlUser.GetValue("contrasena", "").AsString
-                };
+                    if (!reader.Read())
+                    {
+                        return NotFound(new { status = 1, message = "Usuario no encontrado en PostgreSQL" });
+                    }
 
-                return Ok(new { status = 0, data = response });
+                    // 2. Construir respuesta combinada (sin MongoDB)
+                    var response = new UserCombinedResponse
+                    {
+                        UserId = reader.GetInt32(0),
+                        Username = reader.GetString(1),
+                        Nombre = reader.GetString(2),
+                        Apellido = reader.GetString(3),
+                        Email = reader.GetString(4),
+                        Role = reader.GetString(5)
+                    };
+
+                    return Ok(new { status = 0, data = response });
+                }
             }
             catch (Exception ex)
             {
@@ -142,8 +141,78 @@ namespace smartbin.Controllers
             }
         }
 
+        [HttpPost("CreateEmployeeUser")]
+        public ActionResult CreateEmployeeUser([FromBody] CreateEmployeeRequest request)
+        {
+            using (var pgConnection = PostgreSqlConnection.GetConnection())
+            using (var pgTransaction = pgConnection.BeginTransaction())
+            {
+                try
+                {
+                    // --- 1. Validar que la empresa exista en PostgreSQL ---
+                    var companyId = GetCompanyIdByMongoId(request.CompanyMongoId);
+                    if (companyId == null)
+                    {
+                        return BadRequest(new { status = 1, message = "Empresa no encontrada" });
+                    }
 
-        // Modelo para el request
+                    // --- 2. Insertar en PostgreSQL (users) ---
+                    var pgCommand = new NpgsqlCommand(
+                        @"INSERT INTO users 
+                  (username, nombre, apellido, email, contrasena_hash, role, telefono, company_id, active, created_at)
+                  VALUES 
+                  (@username, @nombre, @apellido, @email, @contrasenaHash, 'employee', @telefono, @companyId, true, CURRENT_TIMESTAMP)
+                  RETURNING user_id;",
+                        pgConnection,
+                        pgTransaction
+                    );
+
+                    pgCommand.Parameters.AddWithValue("@username", request.Username);
+                    pgCommand.Parameters.AddWithValue("@nombre", request.Nombre);
+                    pgCommand.Parameters.AddWithValue("@apellido", request.Apellido);
+                    pgCommand.Parameters.AddWithValue("@email", request.Email);
+                    pgCommand.Parameters.AddWithValue("@contrasenaHash", BCrypt.Net.BCrypt.HashPassword(request.Contrasena));
+                    pgCommand.Parameters.AddWithValue("@telefono", request.Telefono ?? (object)DBNull.Value);
+                    pgCommand.Parameters.AddWithValue("@companyId", companyId);
+
+                    int newUserId = (int)pgCommand.ExecuteScalar();
+
+                    // --- 3. Insertar en MongoDB (user_sync) ---
+                    var mongoCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+                    var newUserSync = new BsonDocument
+            {
+                { "sql_user_id", newUserId },
+                { "email", request.Email },
+                { "role", "employee" },
+                { "company_mongo_id", request.CompanyMongoId },
+                { "active", true },
+                { "last_sync", DateTime.UtcNow }
+            };
+                    mongoCollection.InsertOne(newUserSync);
+
+                    pgTransaction.Commit();
+                    return Ok(new { status = 0, message = "Usuario empleado creado", user_id = newUserId });
+                }
+                catch (Exception ex)
+                {
+                    pgTransaction.Rollback();
+                    return StatusCode(500, new { status = 2, message = $"Error: {ex.Message}" });
+                }
+            }
+        }
+
+        // Método auxiliar para obtener company_id desde company_mongo_id
+        private int? GetCompanyIdByMongoId(string mongoCompanyId)
+        {
+            var pgCommand = new NpgsqlCommand(
+                "SELECT company_id FROM companies WHERE mongo_company_id = @mongoId",
+                PostgreSqlConnection.GetConnection()
+            );
+            pgCommand.Parameters.AddWithValue("@mongoId", mongoCompanyId);
+            return (int?)pgCommand.ExecuteScalar();
+        }
+
+        // Request/Response models
         public class AdminUpdateRequest
         {
             public string Username { get; set; }
@@ -152,21 +221,37 @@ namespace smartbin.Controllers
             public string Contrasena { get; set; }
             public string Email { get; set; }
         }
-        // Modelo para GET (respuesta combinada)
+
         public class UserCombinedResponse
         {
-            public string Nombre { get; set; }
+            public int UserId { get; set; }
             public string Username { get; set; }
-            public string Password { get; set; }
+            public string Nombre { get; set; }
+            public string Apellido { get; set; }
+            public string Email { get; set; }
+            public string Role { get; set; }
+            // Agrega más campos si son necesarios
         }
 
-        // Modelo para PUT (actualización)
         public class UserUpdateRequest
         {
-            public string Nombre { get; set; }
             public string Username { get; set; }
+            public string Nombre { get; set; }
+            public string Apellido { get; set; }
+            public string Email { get; set; }
             public string Password { get; set; }
-            public string Email { get; set; } // Requerido para sincronización
+            // public string Role { get; set; }
+        }
+
+        public class CreateEmployeeRequest
+        {
+            public string Username { get; set; }
+            public string Nombre { get; set; }
+            public string Apellido { get; set; }
+            public string Email { get; set; }
+            public string Contrasena { get; set; }
+            public string Telefono { get; set; }
+            public string CompanyMongoId { get; set; }  // ID de MongoDB (COMP-001)
         }
     }
 }
