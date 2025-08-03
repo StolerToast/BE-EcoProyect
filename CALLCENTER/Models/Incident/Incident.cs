@@ -79,12 +79,24 @@ namespace smartbin.Models.Incident
         public static List<BsonDocument> GetSpecificIncidents(IMongoDatabase db)
         {
             var collection = db.GetCollection<BsonDocument>("incidents");
+
+            // Filtro compuesto para type (complaint/damage) y status (pending/in_progress)
+            var matchStage = new BsonDocument("$match", new BsonDocument
+    {
+        {
+            "type", new BsonDocument("$in", new BsonArray { "complaint", "damage" })
+        },
+        {
+            "status", new BsonDocument("$in", new BsonArray { "pending", "in_progress" })
+        }
+    });
+
             var pipeline = new[]
             {
-        // Filtro inicial (solo complaints/damage)
-        new BsonDocument("$match", new BsonDocument("type", new BsonDocument("$in", new BsonArray { "complaint", "damage" }))),
+        // Etapa 1: Filtro combinado
+        matchStage,
 
-        // Lookup para datos del empleado (SQL_users)
+        // Etapa 2: Lookup para datos del empleado (desde SQL_users)
         new BsonDocument("$lookup", new BsonDocument
         {
             { "from", "SQL_users" },
@@ -92,9 +104,13 @@ namespace smartbin.Models.Incident
             { "foreignField", "user_id" },
             { "as", "empleado" }
         }),
-        new BsonDocument("$unwind", "$empleado"),
+        new BsonDocument("$unwind", new BsonDocument
+        {
+            { "path", "$empleado" },
+            { "preserveNullAndEmptyArrays", true } // Para manejar casos donde no hay empleado
+        }),
 
-        // Lookup para datos de la compañía (companies)
+        // Etapa 3: Lookup para datos de la compañía
         new BsonDocument("$lookup", new BsonDocument
         {
             { "from", "companies" },
@@ -102,25 +118,56 @@ namespace smartbin.Models.Incident
             { "foreignField", "company_id" },
             { "as", "company_info" }
         }),
-        new BsonDocument("$unwind", "$company_info"),
+        new BsonDocument("$unwind", new BsonDocument
+        {
+            { "path", "$company_info" },
+            { "preserveNullAndEmptyArrays", true } // Para manejar casos donde no hay compañía
+        }),
 
-        // Proyección final (campos a devolver)
+        // Etapa 4: Proyección final
         new BsonDocument("$project", new BsonDocument
         {
             { "_id", 0 },
-            { "incident_id", 1 },               // Nuevo campo
-            { "type", 1 },                     // Nuevo campo
+            { "incident_id", 1 },
+            //{ "type", 1 },
+            { "status", 1 },
+            { "priority", 1 },
             { "container_id", 1 },
-            { "descripcion", "$description" },
-            { "fecha", "$created_at" },
-            { "imagen", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
-            { "nombre_empleado", new BsonDocument("$concat", new BsonArray { "$empleado.nombre", " ", "$empleado.apellido" }) },
-            { "company_name", "$company_info.name" }  // Nombre en lugar del ID
+            { "description", 1 },
+            { "created_at", 1 },
+            {
+                "imagen",
+                new BsonDocument("$cond", new BsonDocument
+                {
+                    { "if", new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$images"), 0 }) },
+                    { "then", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
+                    { "else", BsonNull.Value }
+                })
+            },
+            {
+                "nombre_empleado",
+                new BsonDocument("$ifNull", new BsonArray
+                {
+                    new BsonDocument("$concat", new BsonArray
+                    {
+                        "$empleado.nombre", " ", "$empleado.apellido"
+                    }),
+                    "$reporter_info.name" // Fallback a los datos del reportero
+                })
+            },
+            {
+                "company_name",
+                new BsonDocument("$ifNull", new BsonArray
+                {
+                    "$company_info.name",
+                    BsonNull.Value
+                })
+            }
         })
     };
+
             return collection.Aggregate<BsonDocument>(pipeline).ToList();
         }
-
         // Consulta incidentes resueltos
         public static List<BsonDocument> GetSolvedIncidents(IMongoDatabase db)
         {
