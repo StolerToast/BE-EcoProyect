@@ -265,6 +265,108 @@ namespace smartbin.Controllers
             }
         }
 
+        [HttpGet("employees")]
+        public ActionResult GetEmployeeUsers()
+        {
+            try
+            {
+                // 1. Obtener empleados desde PostgreSQL
+                var pgCommand = new NpgsqlCommand(
+                    @"SELECT user_id, username, nombre, apellido, email, telefono 
+              FROM users 
+              WHERE role = 'employee'",
+                    PostgreSqlConnection.GetConnection()
+                );
+
+                var employees = new List<EmployeeUserResponse>();
+                using (var reader = pgCommand.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var employee = new EmployeeUserResponse
+                        {
+                            UserId = reader.GetInt32(0),
+                            Username = reader.GetString(1),
+                            Nombre = reader.GetString(2),
+                            Apellido = reader.GetString(3),
+                            Email = reader.GetString(4),
+                            Telefono = reader.IsDBNull(5) ? null : reader.GetString(5)
+                        };
+                        employees.Add(employee);
+                    }
+                }
+
+                // 2. Obtener company_mongo_id desde MongoDB (user_sync)
+                var mongoCollection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+                foreach (var employee in employees)
+                {
+                    var filter = Builders<BsonDocument>.Filter.Eq("sql_user_id", employee.UserId);
+                    var userSync = mongoCollection.Find(filter).FirstOrDefault();
+                    if (userSync != null)
+                    {
+                        employee.CompanyMongoId = userSync.GetValue("company_mongo_id", "").AsString;
+                    }
+                }
+
+                return Ok(new { status = 0, data = employees });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 1, message = ex.Message });
+            }
+        }
+
+        [HttpGet("collectors")]
+        public ActionResult GetCollectorUsers()
+        {
+            try
+            {
+                // 1. Obtener recolectores desde PostgreSQL
+                var pgCommand = new NpgsqlCommand(
+                    @"SELECT user_id, username, nombre, apellido, email, telefono 
+              FROM users 
+              WHERE role = 'collector'",
+                    PostgreSqlConnection.GetConnection()
+                );
+
+                var collectors = new List<CollectorUserResponse>();
+                using (var reader = pgCommand.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var collector = new CollectorUserResponse
+                        {
+                            UserId = reader.GetInt32(0),
+                            Username = reader.GetString(1),
+                            Nombre = reader.GetString(2),
+                            Apellido = reader.GetString(3),
+                            Email = reader.GetString(4),
+                            Telefono = reader.IsDBNull(5) ? null : reader.GetString(5)
+                        };
+                        collectors.Add(collector);
+                    }
+                }
+
+                // 2. Obtener assignment_id desde MongoDB (assignments)
+                var mongoCollection = MongoDbConnection.GetCollection<BsonDocument>("assignments");
+                foreach (var collector in collectors)
+                {
+                    var filter = Builders<BsonDocument>.Filter.Eq("collector_id", collector.UserId.ToString());
+                    var assignment = mongoCollection.Find(filter).FirstOrDefault();
+                    if (assignment != null)
+                    {
+                        collector.AssignmentId = assignment.GetValue("assignment_id", "").AsString;
+                    }
+                }
+
+                return Ok(new { status = 0, data = collectors });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 1, message = ex.Message });
+            }
+        }
+
         // Método auxiliar para obtener company_id desde company_mongo_id
         private int? GetCompanyIdByMongoId(string mongoCompanyId)
         {
@@ -317,6 +419,7 @@ namespace smartbin.Controllers
             public string Telefono { get; set; }
             public string CompanyMongoId { get; set; }  // ID de MongoDB (COMP-001)
         }
+
         public class CreateCollectorRequest
         {
             public string Username { get; set; }
@@ -326,6 +429,27 @@ namespace smartbin.Controllers
             public string Contrasena { get; set; }
             public string Telefono { get; set; }
             // No incluir company_mongo_id
+        }
+        public class EmployeeUserResponse
+        {
+            public int UserId { get; set; }
+            public string Username { get; set; }
+            public string Nombre { get; set; }
+            public string Apellido { get; set; }
+            public string Email { get; set; }
+            public string Telefono { get; set; }
+            public string CompanyMongoId { get; set; }  // Desde MongoDB (user_sync)
+        }
+
+        public class CollectorUserResponse
+        {
+            public int UserId { get; set; }
+            public string Username { get; set; }
+            public string Nombre { get; set; }
+            public string Apellido { get; set; }
+            public string Email { get; set; }
+            public string Telefono { get; set; }
+            public string AssignmentId { get; set; }  // Desde MongoDB (assignments)
         }
     }
 }
