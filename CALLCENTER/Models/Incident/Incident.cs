@@ -79,64 +79,50 @@ namespace smartbin.Models.Incident
         public static List<BsonDocument> GetSpecificIncidents(IMongoDatabase db)
         {
             var collection = db.GetCollection<BsonDocument>("incidents");
-
-            // 1. Filtro combinado para type y status
-            var matchStage = new BsonDocument("$match", new BsonDocument
-    {
-        { "type", new BsonDocument("$in", new BsonArray { "complaint", "damage" }) },
-        { "status", new BsonDocument("$in", new BsonArray { "pending", "in_progress" }) }
-    });
-
-            // 2. Pipeline completo
+            BsonDocument bsonDocument = new("$match", new BsonDocument("type", new BsonDocument("$in", new BsonArray { "complaint", "damage" })));
             var pipeline = new[]
             {
-        matchStage,
+    // Filtro inicial (solo complaints/damage y marcadas con estatus de pending)
 
-        // Lookup a user_sync (reemplaza SQL_users)
-        new BsonDocument("$lookup", new BsonDocument
-        {
-            { "from", "user_sync" },
-            { "localField", "reported_by" },
-            { "foreignField", "sql_user_id" },
-            { "as", "empleado" }
-        }),
-        new BsonDocument("$unwind", "$empleado"),
+    bsonDocument,
 
-        // Lookup a companies
-        new BsonDocument("$lookup", new BsonDocument
-        {
-            { "from", "companies" },
-            { "localField", "company_id" },
-            { "foreignField", "company_id" },
-            { "as", "company_info" }
-        }),
-        new BsonDocument("$unwind", "$company_info"),
+    // Lookup para datos del empleado (SQL_users)
+    new BsonDocument("$lookup", new BsonDocument
+    {
+        { "from", "SQL_users" },
+        { "localField", "reported_by" },
+        { "foreignField", "user_id" },
+        { "as", "empleado" }
+    }),
+    new BsonDocument("$unwind", "$empleado"),
 
-        // Proyección final (igual que antes)
-        new BsonDocument("$project", new BsonDocument
-        {
-            { "_id", 0 },
-            { "incident_id", 1 },
-            { "type", 1 },
-            { "status", 1 },
-            { "container_id", 1 },
-            { "descripcion", "$description" },
-            { "fecha", "$created_at" },
-            { "imagen", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
-            {
-                "nombre_empleado",
-                new BsonDocument("$concat", new BsonArray
-                {
-                    "$empleado.email",  // O usa otro campo de user_sync
-                    " (", "$empleado.role", ")"
-                })
-            },
-            { "company_name", "$company_info.name" }
-        })
-    };
+    // Lookup para datos de la compañía (companies)
+    new BsonDocument("$lookup", new BsonDocument
+    {
+        { "from", "companies" },
+        { "localField", "company_id" },
+        { "foreignField", "company_id" },
+        { "as", "company_info" }
+    }),
+    new BsonDocument("$unwind", "$company_info"),
 
+    // Proyección final (campos a devolver)
+    new BsonDocument("$project", new BsonDocument
+    {
+        { "_id", 0 },
+        { "incident_id", 1 },               // Nuevo campo
+        { "type", 1 },                     // Nuevo campo
+        { "container_id", 1 },
+        { "descripcion", "$description" },
+        { "fecha", "$created_at" },
+        { "imagen", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
+        { "nombre_empleado", new BsonDocument("$concat", new BsonArray { "$empleado.nombre", " ", "$empleado.apellido" }) },
+        { "company_name", "$company_info.name" }  // Nombre en lugar del ID
+    })
+};
             return collection.Aggregate<BsonDocument>(pipeline).ToList();
         }
+
 
         // Consulta incidentes resueltos
         public static List<BsonDocument> GetSolvedIncidents(IMongoDatabase db)
