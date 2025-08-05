@@ -3,12 +3,15 @@ namespace smartbin.PostModels
     public class PostSensorData
     {
         public string DeviceId { get; set; }
+        public string ContainerId { get; set; } // Nuevo campo
         public string Timestamp { get; set; } // ISO string
-        public double Temperatura { get; set; }
-        public double Humedad { get; set; }
-        public double Metano { get; set; }
+        public double Temperature { get; set; }
+        public double Humidity { get; set; }
+        public double Methane { get; set; }
         public double CO2 { get; set; }
-        public double NivelLlenado { get; set; }
-        public string Ubicacion { get; set; } // Ejemplo: "-99.123,19.456"
+        public double FillLevel { get; set; }
+        public double BatteryLevel { get; set; }
+        public string Location { get; set; } // Formato: "-99.123,19.456"
+        public List<string> Alerts { get; set; } = new List<string>(); // Nuevo campo
     }
 }

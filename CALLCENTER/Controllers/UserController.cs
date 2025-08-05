@@ -367,6 +367,34 @@ namespace smartbin.Controllers
             }
         }
 
+        [HttpGet("CardActiveUsers")]
+        public ActionResult<int> CountActiveUsers()
+        {
+            var collection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+            var filter = Builders<BsonDocument>.Filter.Eq("active", true);
+            long count = collection.CountDocuments(filter);
+            return Ok((int)count); // Convertir long a int para Swagger
+        }
+
+        [HttpGet("CardCollectors")]
+        public ActionResult<int> CountCollectors()
+        {
+            var collection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+            var filter = Builders<BsonDocument>.Filter.Eq("role", "collector");
+            long count = collection.CountDocuments(filter);
+            return Ok((int)count);
+        }
+
+        [HttpGet("CardAdmins")]
+        public ActionResult<int> CountAdmins()
+        {
+            var collection = MongoDbConnection.GetCollection<BsonDocument>("user_sync");
+            var filter = Builders<BsonDocument>.Filter.Eq("role", "admin");
+            long count = collection.CountDocuments(filter);
+            return Ok((int)count);
+        }
+
+
         // Método auxiliar para obtener company_id desde company_mongo_id
         private int? GetCompanyIdByMongoId(string mongoCompanyId)
         {

@@ -10,26 +10,10 @@ namespace smartbin.Controllers
     [ApiController]
     public class SensorDataController : ControllerBase
     {
-        [HttpGet]
-        public ActionResult Get()
-        {
-            var list = SensorData.GetAll();
-            return Ok(list);
-        }
-
-        [HttpGet("{deviceId}")]
-        public ActionResult GetByDeviceId(string deviceId)
-        {
-            var data = SensorData.GetByDeviceId(deviceId);
-            if (data == null)
-                return NotFound();
-            return Ok(data);
-        }
-
         [HttpPost]
         public ActionResult Insert([FromForm] PostSensorData postData)
         {
-            var coordinates = postData.Ubicacion
+            var coordinates = postData.Location
                 .Split(',', StringSplitOptions.RemoveEmptyEntries)
                 .Select(s => double.Parse(s.Trim()))
                 .ToArray();
@@ -37,21 +21,34 @@ namespace smartbin.Controllers
             var sensorData = new SensorData
             {
                 DeviceId = postData.DeviceId,
+                ContainerId = postData.ContainerId, // Nuevo campo
                 Timestamp = DateTime.Parse(postData.Timestamp),
-                Temperatura = postData.Temperatura,
-                Humedad = postData.Humedad,
-                Metano = postData.Metano,
-                CO2 = postData.CO2,
-                NivelLlenado = postData.NivelLlenado,
-                Ubicacion = new Ubicacion
+                SensorReadings = new Readings
+                {
+                    Temperature = postData.Temperature,
+                    Humidity = postData.Humidity,
+                    Methane = postData.Methane,
+                    CO2 = postData.CO2,
+                    FillLevel = postData.FillLevel,
+                    BatteryLevel = postData.BatteryLevel
+                },
+                PointLocation = new Location
                 {
                     Type = "Point",
                     Coordinates = coordinates
-                }
+                },
+                Alerts = postData.Alerts // Nuevo campo
             };
 
             sensorData.Insert();
-            return Ok(new { status = 0, message = "Sensor data insertado correctamente" });
+            return Ok(new { status = 0, message = "Datos del sensor insertados correctamente" });
+        }
+
+        [HttpGet]
+        public ActionResult GetAll()
+        {
+            var list = SensorData.GetAll(); // Retorna List<SensorData> con la nueva estructura
+            return Ok(list);
         }
     }
 }

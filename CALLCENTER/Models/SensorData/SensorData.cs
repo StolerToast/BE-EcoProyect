@@ -8,7 +8,7 @@ using System.Linq;
 
 namespace smartbin.Models.SensorData
 {
-    public partial class SensorData
+    public class SensorData
     {
         [BsonId]
         [BsonElement("_id")]
@@ -17,27 +17,22 @@ namespace smartbin.Models.SensorData
         [BsonElement("device_id")]
         public string DeviceId { get; set; } = "";
 
+        [BsonElement("container_id")]
+        public string ContainerId { get; set; } = ""; // Nuevo campo
+
         [BsonElement("timestamp")]
         public DateTime Timestamp { get; set; }
 
-        [BsonElement("temperatura")]
-        public double Temperatura { get; set; }
+        [BsonElement("readings")]
+        public Readings SensorReadings { get; set; } = new Readings();
 
-        [BsonElement("humedad")]
-        public double Humedad { get; set; }
+        [BsonElement("location")]
+        public Location PointLocation { get; set; } = new Location();
 
-        [BsonElement("metano")]
-        public double Metano { get; set; }
+        [BsonElement("alerts")]
+        public List<string> Alerts { get; set; } = new List<string>();
 
-        [BsonElement("co2")]
-        public double CO2 { get; set; }
-
-        [BsonElement("nivel_llenado")]
-        public double NivelLlenado { get; set; }
-
-        [BsonElement("ubicacion")]
-        public Ubicacion Ubicacion { get; set; } = new Ubicacion();
-
+        // Métodos existentes (actualizados para nueva estructura)
         public static List<SensorData> GetAll()
         {
             var collection = MongoDbConnection.GetCollection<SensorData>("sensor_data");
@@ -48,7 +43,7 @@ namespace smartbin.Models.SensorData
         {
             var collection = MongoDbConnection.GetCollection<SensorData>("sensor_data");
             var filter = Builders<SensorData>.Filter.Eq(s => s.DeviceId, deviceId);
-            return collection.Find(filter).SortBy(s => s.Timestamp).ToList();
+            return collection.Find(filter).SortByDescending(s => s.Timestamp).ToList();
         }
 
         public void Insert()
@@ -58,12 +53,33 @@ namespace smartbin.Models.SensorData
         }
     }
 
-    public class Ubicacion
+    public class Readings
+    {
+        [BsonElement("temperature")]
+        public double Temperature { get; set; }
+
+        [BsonElement("humidity")]
+        public double Humidity { get; set; }
+
+        [BsonElement("methane")]
+        public double Methane { get; set; }
+
+        [BsonElement("co2")]
+        public double CO2 { get; set; }
+
+        [BsonElement("fill_level")]
+        public double FillLevel { get; set; }
+
+        [BsonElement("battery_level")]
+        public double BatteryLevel { get; set; }
+    }
+
+    public class Location
     {
         [BsonElement("type")]
         public string Type { get; set; } = "Point";
 
         [BsonElement("coordinates")]
-        public double[] Coordinates { get; set; } = new double[0];
+        public double[] Coordinates { get; set; } = Array.Empty<double>();
     }
 }
