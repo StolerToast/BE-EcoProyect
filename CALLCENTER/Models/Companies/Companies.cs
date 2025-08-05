@@ -4,7 +4,9 @@ using MongoDB.Driver;
 using Npgsql;
 using smartbin.DataAccess;
 using smartbin.PostModels;
+using System;
 using System.Data;
+using System.Linq;
 
 namespace smartbin.Models.Companies
 {
@@ -32,9 +34,8 @@ namespace smartbin.Models.Companies
         public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
 
         [BsonElement("updated_at")]
-        public DateTime? FechaActualizacion { get; set; } // Nullable por si no existe
+        public DateTime? FechaActualizacion { get; set; }
 
-        // Clases anidadas para la estructura MongoDB
         public class Location
         {
             [BsonElement("type")]
@@ -56,10 +57,29 @@ namespace smartbin.Models.Companies
             public string Direccion { get; set; }
         }
 
-        // Método para obtener todas las empresas (híbrido)
+        private static string GenerateSequentialId()
+        {
+            var lastCompany = MongoDbConnection.GetCollection<Companies>("companies")
+                .Find(Builders<Companies>.Filter.Empty)
+                .SortByDescending(c => c.CompanyId)
+                .FirstOrDefault();
+
+            if (lastCompany == null)
+                return "COMP-001";
+
+            // Manejo seguro para extraer el número
+            var parts = lastCompany.CompanyId.Split('-');
+            if (parts.Length != 2 || !int.TryParse(parts[1], out int lastNumber))
+            {
+                // Si el formato no es correcto, empezamos de nuevo
+                return "COMP-001";
+            }
+
+            return $"COMP-{(lastNumber + 1).ToString("D3")}";
+        }
+
         public static dynamic GetAll()
         {
-            // 1. Consulta a PostgreSQL
             string query = @"
                 SELECT c.mongo_company_id, c.name, c.email, c.phone, c.address, c.active
                 FROM companies c
@@ -68,11 +88,9 @@ namespace smartbin.Models.Companies
             var command = new NpgsqlCommand(query);
             DataTable pgResults = PostgreSqlConnection.ExecuteQuery(command);
 
-            // 2. Consulta a MongoDB para obtener ubicaciones
             var mongoCollection = MongoDbConnection.GetCollection<Companies>("companies");
             var mongoResults = mongoCollection.Find(Builders<Companies>.Filter.Empty).ToList();
 
-            // 3. Combinar resultados
             var combined = pgResults.AsEnumerable().Select(pgRow => new
             {
                 CompanyId = pgRow.Field<string>("mongo_company_id"),
@@ -87,54 +105,188 @@ namespace smartbin.Models.Companies
             return combined;
         }
 
-        // Método para insertar (híbrido)
-        public static dynamic Insert(PostCompanies nuevaCompanies)
+        public static dynamic GetById(string companyId)
         {
-            // Generar ID manualmente (ya que MongoDB es el sistema de referencia)
-            string companyId = $"COMP-{DateTime.UtcNow:yyyyMMddHHmmss}";
-
-            // 1. Insertar en PostgreSQL (sin depender de SERIAL)
+            // 1. Consulta a PostgreSQL
             string pgQuery = @"
-        INSERT INTO companies 
-            (mongo_company_id, name, email, phone, address, active, created_at)
-        VALUES 
-            (@mongoId, @nombre, @email, @telefono, @direccion, true, CURRENT_TIMESTAMP)";
+                SELECT c.mongo_company_id, c.name, c.email, c.phone, c.address, c.active
+                FROM companies c
+                WHERE c.mongo_company_id = @companyId AND c.active = true";
 
             var pgCommand = new NpgsqlCommand(pgQuery);
-            pgCommand.Parameters.AddWithValue("@mongoId", companyId);
-            pgCommand.Parameters.AddWithValue("@nombre", nuevaCompanies.Nombre);
-            pgCommand.Parameters.AddWithValue("@email", nuevaCompanies.Email);
-            pgCommand.Parameters.AddWithValue("@telefono", nuevaCompanies.Telefono);
-            pgCommand.Parameters.AddWithValue("@direccion", nuevaCompanies.Direccion);
+            pgCommand.Parameters.AddWithValue("@companyId", companyId);
+            DataTable pgResult = PostgreSqlConnection.ExecuteQuery(pgCommand);
 
-            PostgreSqlConnection.ExecuteNonQuery(pgCommand);
+            if (pgResult.Rows.Count == 0)
+                return null;
 
-            // 2. Insertar en MongoDB (igual que antes)
-            var mongoEmpresa = new Companies
+            // 2. Consulta a MongoDB
+            var mongoCollection = MongoDbConnection.GetCollection<Companies>("companies");
+            var mongoData = mongoCollection.Find(c => c.CompanyId == companyId).FirstOrDefault();
+
+            // 3. Combinar resultados
+            var pgRow = pgResult.Rows[0];
+            return new
             {
-                CompanyId = companyId,
-                Nombre = nuevaCompanies.Nombre,
-                Coordenadas = new Location
-                {
-                    Coordenadas = nuevaCompanies.Ubicacion
-                        .Split(',')
-                        .Select(double.Parse)
-                        .ToArray()
-                },
-                FechaActualizacion = DateTime.UtcNow,
-                Contacto = new ContactInfo
-                {
-                    Email = nuevaCompanies.Email,
-                    Telefono = nuevaCompanies.Telefono,
-                    Direccion = nuevaCompanies.Direccion
-                },
-                Activa = true,
-                FechaCreacion = DateTime.UtcNow
+                CompanyId = pgRow.Field<string>("mongo_company_id"),
+                Nombre = pgRow.Field<string>("name"),
+                Email = pgRow.Field<string>("email"),
+                Telefono = pgRow.Field<string>("phone"),
+                Direccion = pgRow.Field<string>("address"),
+                Activa = pgRow.Field<bool>("active"),
+                Ubicacion = mongoData?.Coordenadas
             };
+        }
 
-            MongoDbConnection.GetCollection<Companies>("companies").InsertOne(mongoEmpresa);
+        public static dynamic InsertWithTransaction(PostCompanies nuevaCompany)
+        {
+            using (var pgConnection = PostgreSqlConnection.GetConnection())
+            using (var pgTransaction = pgConnection.BeginTransaction())
+            {
+                try
+                {
+                    string companyId = GenerateSequentialId();
 
-            return new { companyId };
+                    // 1. Insertar en PostgreSQL
+                    string pgQuery = @"
+                INSERT INTO companies 
+                    (mongo_company_id, name, email, phone, address, active, created_at)
+                VALUES 
+                    (@mongoId, @nombre, @email, @telefono, @direccion, true, CURRENT_TIMESTAMP)
+                RETURNING company_id";
+
+                    var pgCommand = new NpgsqlCommand(pgQuery, pgConnection, pgTransaction);
+                    pgCommand.Parameters.AddWithValue("@mongoId", companyId);
+                    pgCommand.Parameters.AddWithValue("@nombre", nuevaCompany.Nombre);
+                    pgCommand.Parameters.AddWithValue("@email", nuevaCompany.Email);
+                    pgCommand.Parameters.AddWithValue("@telefono", nuevaCompany.Telefono ?? (object)DBNull.Value);
+                    pgCommand.Parameters.AddWithValue("@direccion", nuevaCompany.Direccion ?? (object)DBNull.Value);
+
+                    // Usar Convert.ToInt64 para evitar el error de Int32
+                    long pgCompanyId = Convert.ToInt64(pgCommand.ExecuteScalar());
+
+                    // 2. Insertar en MongoDB
+                    var mongoCompany = new Companies
+                    {
+                        CompanyId = companyId,
+                        Nombre = nuevaCompany.Nombre,
+                        Coordenadas = new Location
+                        {
+                            Coordenadas = nuevaCompany.Ubicacion
+                                .Split(',')
+                                .Select(double.Parse)
+                                .ToArray()
+                        },
+                        Contacto = new ContactInfo
+                        {
+                            Email = nuevaCompany.Email,
+                            Telefono = nuevaCompany.Telefono,
+                            Direccion = nuevaCompany.Direccion
+                        },
+                        Activa = true,
+                        FechaCreacion = DateTime.UtcNow
+                    };
+
+                    MongoDbConnection.GetCollection<Companies>("companies").InsertOne(mongoCompany);
+
+                    pgTransaction.Commit();
+                    return new { companyId, pgCompanyId };
+                }
+                catch (Exception ex)
+                {
+                    pgTransaction.Rollback();
+                    throw new Exception($"Error en transacción híbrida: {ex.Message}");
+                }
+            }
+        }
+
+        public static bool UpdateWithTransaction(string companyId, PostCompanies updatedCompany)
+        {
+            using (var pgConnection = PostgreSqlConnection.GetConnection())
+            using (var pgTransaction = pgConnection.BeginTransaction())
+            {
+                try
+                {
+                    // 1. Actualizar PostgreSQL (sin updated_at)
+                    var pgCommand = new NpgsqlCommand(@"
+                UPDATE companies 
+                SET name = @nombre, 
+                    email = @email, 
+                    phone = @telefono, 
+                    address = @direccion
+                WHERE mongo_company_id = @companyId",
+                        pgConnection, pgTransaction);
+
+                    pgCommand.Parameters.AddWithValue("@nombre", updatedCompany.Nombre);
+                    pgCommand.Parameters.AddWithValue("@email", updatedCompany.Email);
+                    pgCommand.Parameters.AddWithValue("@telefono", updatedCompany.Telefono);
+                    pgCommand.Parameters.AddWithValue("@direccion", updatedCompany.Direccion);
+                    pgCommand.Parameters.AddWithValue("@companyId", companyId);
+
+                    int pgRows = pgCommand.ExecuteNonQuery();
+                    if (pgRows == 0)
+                    {
+                        pgTransaction.Rollback();
+                        return false;
+                    }
+
+                    // 2. Actualizar MongoDB (mantenemos updated_at aquí)
+                    var mongoUpdate = Builders<Companies>.Update
+                        .Set(c => c.Nombre, updatedCompany.Nombre)
+                        .Set(c => c.Contacto.Email, updatedCompany.Email)
+                        .Set(c => c.Contacto.Telefono, updatedCompany.Telefono)
+                        .Set(c => c.Contacto.Direccion, updatedCompany.Direccion)
+                        .Set(c => c.Coordenadas.Coordenadas, updatedCompany.Ubicacion.Split(',').Select(double.Parse).ToArray())
+                        .Set(c => c.FechaActualizacion, DateTime.UtcNow);
+
+                    var mongoResult = MongoDbConnection.GetCollection<Companies>("companies")
+                        .UpdateOne(c => c.CompanyId == companyId, mongoUpdate);
+
+                    pgTransaction.Commit();
+                    return mongoResult.ModifiedCount > 0;
+                }
+                catch (Exception ex)
+                {
+                    pgTransaction.Rollback();
+                    throw new Exception($"Error al actualizar: {ex.Message}");
+                }
+            }
+        }
+
+        public static bool DeactivateWithTransaction(string companyId)
+        {
+            using (var pgConnection = PostgreSqlConnection.GetConnection())
+            using (var pgTransaction = pgConnection.BeginTransaction())
+            {
+                try
+                {
+                    // 1. Desactivar en PostgreSQL (sin updated_at)
+                    var pgCommand = new NpgsqlCommand(@"
+                UPDATE companies 
+                SET active = false
+                WHERE mongo_company_id = @companyId",
+                        pgConnection, pgTransaction);
+
+                    pgCommand.Parameters.AddWithValue("@companyId", companyId);
+                    int pgRows = pgCommand.ExecuteNonQuery();
+
+                    // 2. Desactivar en MongoDB
+                    var mongoUpdate = Builders<Companies>.Update
+                        .Set(c => c.Activa, false)
+                        .Set(c => c.FechaActualizacion, DateTime.UtcNow);
+
+                    var mongoResult = MongoDbConnection.GetCollection<Companies>("companies")
+                        .UpdateOne(c => c.CompanyId == companyId, mongoUpdate);
+
+                    pgTransaction.Commit();
+                    return pgRows > 0 && mongoResult.ModifiedCount > 0;
+                }
+                catch (Exception ex)
+                {
+                    pgTransaction.Rollback();
+                    throw new Exception($"Error al desactivar: {ex.Message}");
+                }
+            }
         }
     }
 }
