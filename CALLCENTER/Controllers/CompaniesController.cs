@@ -102,5 +102,27 @@ namespace smartbin.Controllers
                 });
             }
         }
+
+        [HttpGet("map")]
+        public ActionResult GetMapData()
+        {
+            try
+            {
+                var mapData = Companies.GetMapData();
+                return Ok(new
+                {
+                    status = 0,
+                    data = mapData
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    status = 1,
+                    message = $"Error al obtener datos para mapa: {ex.Message}"
+                });
+            }
+        }
     }
 }

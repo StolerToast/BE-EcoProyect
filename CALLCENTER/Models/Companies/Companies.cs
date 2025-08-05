@@ -288,5 +288,39 @@ namespace smartbin.Models.Companies
                 }
             }
         }
+
+        public static dynamic GetMapData()
+        {
+            // 1. Consulta a PostgreSQL para datos básicos
+            string pgQuery = @"
+        SELECT c.mongo_company_id, c.name, c.address
+        FROM companies c
+        WHERE c.active = true";
+
+            var command = new NpgsqlCommand(pgQuery);
+            DataTable pgResults = PostgreSqlConnection.ExecuteQuery(command);
+
+            // 2. Consulta a MongoDB para coordenadas
+            var mongoCollection = MongoDbConnection.GetCollection<Companies>("companies");
+            var mongoResults = mongoCollection.Find(Builders<Companies>.Filter.Empty).ToList();
+
+            // 3. Combinar resultados
+            var mapData = pgResults.AsEnumerable().Select(pgRow =>
+            {
+                var companyId = pgRow.Field<string>("mongo_company_id");
+                var mongoData = mongoResults.FirstOrDefault(m => m.CompanyId == companyId);
+
+                return new
+                {
+                    Id = companyId,
+                    Nombre = pgRow.Field<string>("name"),
+                    Direccion = pgRow.Field<string>("address"),
+                    Coordenadas = mongoData?.Coordenadas?.Coordenadas,
+                    Contenedores = 5 // Valor fijo temporal
+                };
+            }).ToList();
+
+            return mapData;
+        }
     }
 }
