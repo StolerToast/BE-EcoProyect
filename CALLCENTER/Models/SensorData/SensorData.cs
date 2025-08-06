@@ -69,6 +69,64 @@ namespace smartbin.Models.SensorData
             return collection.Aggregate<BsonDocument>(pipeline).ToList();
         }
 
+        public static List<BsonDocument> GetLatestGasReadingsForDashboard()
+        {
+            var collection = MongoDbConnection.GetCollection<BsonDocument>("sensor_data");
+
+            var pipeline = new[]
+            {
+        // Ordenar por device_id y timestamp (más reciente primero)
+        new BsonDocument("$sort", new BsonDocument
+        {
+            { "device_id", 1 },
+            { "timestamp", -1 }
+        }),
+        
+        // Agrupar por device_id y tomar el primer documento (el más reciente)
+        new BsonDocument("$group", new BsonDocument
+        {
+            { "_id", "$device_id" },
+            { "latest_doc", new BsonDocument("$first", "$$ROOT") }
+        }),
+        
+        // Limitar a 5 dispositivos
+        new BsonDocument("$limit", 5),
+        
+        // Proyectar campos con valores por defecto si no existen
+        new BsonDocument("$project", new BsonDocument
+        {
+            { "_id", 0 },
+            { "device_id", "$latest_doc.device_id" },
+            {
+                "methane",
+                new BsonDocument("$ifNull", new BsonArray
+                {
+                    "$latest_doc.readings.methane",
+                    0.0  // Valor por defecto en ppm
+                })
+            },
+            {
+                "co2",
+                new BsonDocument("$ifNull", new BsonArray
+                {
+                    "$latest_doc.readings.co2",
+                    0.0  // Valor por defecto en ppm
+                })
+            },
+            {
+                "timestamp",
+                new BsonDocument("$ifNull", new BsonArray
+                {
+                    "$latest_doc.timestamp",
+                    DateTime.MinValue
+                })
+            }
+        })
+    };
+
+            return collection.Aggregate<BsonDocument>(pipeline).ToList();
+        }
+
         // Métodos existentes (actualizados para nueva estructura)
         public static List<SensorData> GetAll()
         {

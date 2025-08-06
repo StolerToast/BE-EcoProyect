@@ -72,5 +72,27 @@ namespace smartbin.Controllers
                 return StatusCode(500, new { status = 1, message = ex.Message });
             }
         }
+
+        [HttpGet("dashboard/gases")]
+        public ActionResult GetDashboardGasData()
+        {
+            try
+            {
+                var results = SensorData.GetLatestGasReadingsForDashboard()
+                    .ConvertAll(doc => new
+                    {
+                        device_id = doc.GetValue("device_id", "").AsString,
+                        methane = doc.GetValue("methane", 0.0).AsDouble,  // en ppm
+                        co2 = doc.GetValue("co2", 0.0).AsDouble,          // en ppm
+                        timestamp = doc.GetValue("timestamp", DateTime.MinValue).ToUniversalTime()
+                    });
+
+                return Ok(new { status = 0, data = results });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 1, message = ex.Message });
+            }
+        }
     }
 }
