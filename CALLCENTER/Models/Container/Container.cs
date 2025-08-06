@@ -80,10 +80,25 @@ namespace smartbin.Models.Container
         }
 
         public static long CountActiveContainers()
+{
+    var collection = MongoDbConnection.GetCollection<Container>("containers");
+    var filter = Builders<Container>.Filter.Eq(c => c.Status, "active");
+    return collection.CountDocuments(filter);
+}
+
+        public static string GetNextContainerId()
         {
             var collection = MongoDbConnection.GetCollection<Container>("containers");
-            var filter = Builders<Container>.Filter.Eq(c => c.Status, "active");
-            return collection.CountDocuments(filter);
+            var lastContainer = collection.Find(FilterDefinition<Container>.Empty)
+                                         .SortByDescending(c => c.ContainerId)
+                                         .FirstOrDefault();
+
+            if (lastContainer == null)
+                return "CTN-001";
+
+            var lastId = lastContainer.ContainerId;
+            var lastNumber = int.Parse(lastId.Split('-')[1]);
+            return $"CTN-{(lastNumber + 1).ToString("D3")}"; // Formato CTN-XXX
         }
     }
 

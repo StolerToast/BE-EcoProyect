@@ -1,5 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using MongoDB.Driver;
+using smartbin.DataAccess;
 using smartbin.Models.Container;
+using smartbin.Models.SensorData;
 using smartbin.PostModels;
 using System;
 using System.Linq;
@@ -12,47 +15,62 @@ namespace smartbin.Controllers
     {
         // GET: api/Container
         [HttpGet]
-        public ActionResult GetAll()
-        {
-            var containers = Container.GetAll();
-            return Ok(containers);
-        }
+        public ActionResult GetAll() => Ok(Container.GetAll());
 
-        // GET: api/Container/CTN-001
         [HttpGet("{containerId}")]
         public ActionResult GetById(string containerId)
         {
             var container = Container.GetById(containerId);
-            if (container == null)
-                return NotFound();
-            return Ok(container);
+            return container != null ? Ok(container) : NotFound();
+        }
+
+        [HttpGet("by-company/{companyId}")]
+        public ActionResult GetByCompanyId(string companyId)
+        {
+            var collection = MongoDbConnection.GetCollection<Container>("containers");
+            var filter = Builders<Container>.Filter.Eq(c => c.CompanyId, companyId);
+            var containers = collection.Find(filter).ToList();
+            return Ok(containers);
         }
 
         // POST: api/Container
         [HttpPost]
         public ActionResult Insert([FromForm] PostContainer postData)
         {
-            var coordinates = postData.Location
-                .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => double.Parse(s.Trim()))
-                .ToArray();
+            // 1. Obtener la ubicación del device_id desde sensor_data
+            var sensorCollection = MongoDbConnection.GetCollection<SensorData>("sensor_data");
+            var latestSensorData = sensorCollection.Find(s => s.DeviceId == postData.DeviceId)
+                                                 .SortByDescending(s => s.Timestamp)
+                                                 .FirstOrDefault();
 
+            if (latestSensorData == null)
+                return BadRequest("El dispositivo no tiene datos de ubicación registrados");
+
+            // 2. Generar container_id automático
+            string containerId = Container.GetNextContainerId();
+            var currentDate = DateTime.UtcNow; // Fecha/hora actual para created_at y last_collection
+
+            // 3. Crear el contenedor
             var container = new Container
             {
-                ContainerId = postData.ContainerId,
+                ContainerId = containerId,
                 CompanyId = postData.CompanyId,
-                QrCode = postData.QrCode,
-                GeoLocation = new Location { Type = "Point", Coordinates = coordinates },
+                QrCode = "", // QR vacío
+                GeoLocation = new Models.Container.Location
+                {
+                    Type = "Point",
+                    Coordinates = latestSensorData.PointLocation.Coordinates
+                },
                 Type = postData.Type,
                 Capacity = postData.Capacity,
                 Status = postData.Status,
                 DeviceId = postData.DeviceId,
-                LastCollection = DateTime.Parse(postData.LastCollection),
-                CreatedAt = DateTime.UtcNow
+                LastCollection = currentDate, // Igual que created_at
+                CreatedAt = currentDate
             };
 
             container.Insert();
-            return Ok(new { status = 0, message = "Contenedor creado correctamente" });
+            return Ok(new { status = 0, message = "Contenedor creado", container_id = containerId });
         }
 
         // PUT: api/Container/CTN-001
@@ -63,24 +81,31 @@ namespace smartbin.Controllers
             if (existingContainer == null)
                 return NotFound();
 
-            var coordinates = postData.Location
-                .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => double.Parse(s.Trim()))
-                .ToArray();
+            // Obtener nueva ubicación si el device_id cambió
+            double[] coordinates = existingContainer.GeoLocation.Coordinates;
+            if (postData.DeviceId != existingContainer.DeviceId)
+            {
+                var sensorCollection = MongoDbConnection.GetCollection<SensorData>("sensor_data");
+                var latestSensorData = sensorCollection.Find(s => s.DeviceId == postData.DeviceId)
+                                                     .SortByDescending(s => s.Timestamp)
+                                                     .FirstOrDefault();
+                if (latestSensorData != null)
+                    coordinates = latestSensorData.PointLocation.Coordinates;
+            }
 
             var updatedContainer = new Container
             {
-                Id = existingContainer.Id, // Mantener el mismo ObjectId
-                ContainerId = postData.ContainerId,
+                Id = existingContainer.Id,
+                ContainerId = containerId, // No cambia
                 CompanyId = postData.CompanyId,
-                QrCode = postData.QrCode,
-                GeoLocation = new Location { Type = "Point", Coordinates = coordinates },
+                QrCode = existingContainer.QrCode, // Mantener el QR original
+                GeoLocation = new Models.Container.Location { Type = "Point", Coordinates = coordinates },
                 Type = postData.Type,
                 Capacity = postData.Capacity,
                 Status = postData.Status,
                 DeviceId = postData.DeviceId,
-                LastCollection = DateTime.Parse(postData.LastCollection),
-                CreatedAt = existingContainer.CreatedAt // No modificar
+                //LastCollection = DateTime.Parse(postData.LastCollection),
+                CreatedAt = existingContainer.CreatedAt
             };
 
             bool success = Container.Update(containerId, updatedContainer);
