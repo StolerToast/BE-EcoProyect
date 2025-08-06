@@ -1,4 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Bson;
+using MongoDB.Driver;
+
+using smartbin.DataAccess;
 using smartbin.Models.SensorData;
 using smartbin.PostModels;
 using System;
@@ -51,7 +55,7 @@ namespace smartbin.Controllers
             return Ok(list);
         }
 
-        [HttpGet("GraphicTemperatureHumidity")]
+        [HttpGet("dashboard/Temperature")]
         public ActionResult GetDashboardData()
         {
             try
@@ -73,7 +77,7 @@ namespace smartbin.Controllers
             }
         }
 
-        [HttpGet("dashboard/gases")]
+        [HttpGet("dashboard/Gases")]
         public ActionResult GetDashboardGasData()
         {
             try
@@ -93,6 +97,64 @@ namespace smartbin.Controllers
             {
                 return StatusCode(500, new { status = 1, message = ex.Message });
             }
+        }
+
+        [HttpGet("dashboard/Averages")]
+        public ActionResult GetAverages()
+        {
+            var collection = MongoDbConnection.GetCollection<SensorData>("sensor_data");
+
+            var pipeline = new[]
+            {
+        // Paso 1: Ordenar por device_id y timestamp (más reciente primero)
+        new BsonDocument("$sort",
+            new BsonDocument
+            {
+                { "device_id", 1 },
+                { "timestamp", -1 }
+            }),
+        
+        // Paso 2: Agrupar por device_id y quedarse con el primer registro
+        new BsonDocument("$group",
+            new BsonDocument
+            {
+                { "_id", "$device_id" },
+                { "latest_doc", new BsonDocument("$first", "$$ROOT") }
+            }),
+        
+        // Paso 3: Calcular promedios
+        new BsonDocument("$group",
+            new BsonDocument
+            {
+                { "_id", BsonNull.Value },
+                { "avg_temperature", new BsonDocument("$avg", "$latest_doc.readings.temperature") },
+                { "avg_humidity", new BsonDocument("$avg", "$latest_doc.readings.humidity") },
+                { "avg_methane", new BsonDocument("$avg", "$latest_doc.readings.methane") },
+                { "avg_co2", new BsonDocument("$avg", "$latest_doc.readings.co2") },
+                { "avg_fill_level", new BsonDocument("$avg", "$latest_doc.readings.fill_level") },
+                { "devices_count", new BsonDocument("$sum", 1) }
+            }),
+        
+        // Paso 4: Dar formato al resultado
+        new BsonDocument("$project",
+            new BsonDocument
+            {
+                { "_id", 0 },
+                { "avg_temperature", new BsonDocument("$round", new BsonArray { "$avg_temperature", 2 }) },
+                { "avg_humidity", new BsonDocument("$round", new BsonArray { "$avg_humidity", 2 }) },
+                { "avg_methane", new BsonDocument("$round", new BsonArray { "$avg_methane", 2 }) },
+                { "avg_co2", new BsonDocument("$round", new BsonArray { "$avg_co2", 2 }) },
+                { "avg_fill_level", new BsonDocument("$round", new BsonArray { "$avg_fill_level", 2 }) },
+                { "devices_count", 1 }
+            })
+    };
+
+            var result = collection.Aggregate<SensorAverages>(pipeline).FirstOrDefault();
+
+            if (result == null)
+                return NotFound();
+
+            return Ok(result);
         }
     }
 }
