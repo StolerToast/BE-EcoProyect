@@ -50,5 +50,27 @@ namespace smartbin.Controllers
             var list = SensorData.GetAll(); // Retorna List<SensorData> con la nueva estructura
             return Ok(list);
         }
+
+        [HttpGet("GraphicTemperatureHumidity")]
+        public ActionResult GetDashboardData()
+        {
+            try
+            {
+                var results = SensorData.GetLatestReadingsForDashboard()
+                    .ConvertAll(doc => new
+                    {
+                        device_id = doc["device_id"].AsString,
+                        temperature = doc["temperature"].AsDouble,
+                        humidity = doc["humidity"].AsDouble,
+                        timestamp = doc["timestamp"].ToUniversalTime()
+                    });
+
+                return Ok(new { status = 0, data = results });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 1, message = ex.Message });
+            }
+        }
     }
 }
