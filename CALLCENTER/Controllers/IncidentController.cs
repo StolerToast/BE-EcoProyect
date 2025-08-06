@@ -21,9 +21,16 @@ namespace smartbin.Controllers
         [HttpGet("specific")]
         public ActionResult GetSpecific()
         {
-            var db = MongoDbConnection.GetDatabase();
-            var list = Incident.GetSpecificIncidents(db).ConvertAll(doc => doc.ToDictionary());
-            return Ok(list);
+            try
+            {
+                var db = MongoDbConnection.GetDatabase();
+                var list = Incident.GetSpecificIncidents(db).ConvertAll(doc => doc.ToDictionary());
+                return Ok(new { status = 0, data = list });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 1, message = ex.Message });
+            }
         }
 
         [HttpGet("resolved")]

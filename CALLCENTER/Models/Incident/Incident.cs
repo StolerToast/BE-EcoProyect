@@ -1,6 +1,7 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
+using Npgsql;
 using smartbin.DataAccess;
 using System;
 using System.Collections.Generic;
@@ -79,96 +80,98 @@ namespace smartbin.Models.Incident
         public static List<BsonDocument> GetSpecificIncidents(IMongoDatabase db)
         {
             var collection = db.GetCollection<BsonDocument>("incidents");
-            BsonDocument bsonDocument = new("$match", new BsonDocument("type", new BsonDocument("$in", new BsonArray { "complaint", "damage" })));
-            var pipeline = new[]
+
+            // 1. Primero obtenemos los incidentes de MongoDB
+            var incidents = collection.Find(new BsonDocument("type", new BsonDocument("$in", new BsonArray { "complaint", "damage" }))).ToList();
+
+            var result = new List<BsonDocument>();
+
+            using (var pgConnection = PostgreSqlConnection.GetConnection())
             {
-    // Filtro inicial (solo complaints/damage y marcadas con estatus de pending)
+                foreach (var incident in incidents)
+                {
+                    // 2. Para cada incidente, obtenemos el usuario de PostgreSQL
+                    var reportedBy = incident["reported_by"].AsInt32;
+                    var pgCommand = new NpgsqlCommand(
+                        "SELECT nombre, apellido FROM users WHERE user_id = @userId",
+                        pgConnection);
+                    pgCommand.Parameters.AddWithValue("@userId", reportedBy);
 
-    bsonDocument,
+                    using (var reader = pgCommand.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            var nombre = reader.GetString(0);
+                            var apellido = reader.GetString(1);
 
-    // Lookup para datos del empleado (SQL_users)
-    new BsonDocument("$lookup", new BsonDocument
-    {
-        { "from", "SQL_users" },
-        { "localField", "reported_by" },
-        { "foreignField", "user_id" },
-        { "as", "empleado" }
-    }),
-    new BsonDocument("$unwind", "$empleado"),
+                            // 3. Construimos el documento combinado
+                            var doc = new BsonDocument
+                    {
+                        { "incident_id", incident["incident_id"] },
+                        { "type", incident["type"] },
+                        { "container_id", incident["container_id"] },
+                        { "description", incident["description"] },
+                        { "created_at", incident["created_at"] },
+                        { "nombre_empleado", $"{nombre} {apellido}" },
+                        // ... otros campos necesarios
+                    };
+                            result.Add(doc);
+                        }
+                    }
+                }
+            }
 
-    // Lookup para datos de la compañía (companies)
-    new BsonDocument("$lookup", new BsonDocument
-    {
-        { "from", "companies" },
-        { "localField", "company_id" },
-        { "foreignField", "company_id" },
-        { "as", "company_info" }
-    }),
-    new BsonDocument("$unwind", "$company_info"),
-
-    // Proyección final (campos a devolver)
-    new BsonDocument("$project", new BsonDocument
-    {
-        { "_id", 0 },
-        { "incident_id", 1 },               // Nuevo campo
-        { "type", 1 },                     // Nuevo campo
-        { "container_id", 1 },
-        { "descripcion", "$description" },
-        { "fecha", "$created_at" },
-        { "imagen", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
-        { "nombre_empleado", new BsonDocument("$concat", new BsonArray { "$empleado.nombre", " ", "$empleado.apellido" }) },
-        { "company_name", "$company_info.name" }  // Nombre en lugar del ID
-    })
-};
-            return collection.Aggregate<BsonDocument>(pipeline).ToList();
+            return result;
         }
 
-
-        // Consulta incidentes resueltos
         public static List<BsonDocument> GetSolvedIncidents(IMongoDatabase db)
         {
             var collection = db.GetCollection<BsonDocument>("incidents");
-            var pipeline = new[]
+
+            // 1. Obtener todos los incidentes resueltos
+            var incidents = collection.Find(new BsonDocument("status", "resolved")).ToList();
+
+            // 2. Obtener todos los user_ids únicos
+            var userIds = incidents.Select(i => i["reported_by"].AsInt32).Distinct().ToList();
+
+            var userNames = new Dictionary<int, (string, string)>();
+
+            using (var pgConnection = PostgreSqlConnection.GetConnection())
             {
-        // Filtro inicial (solo complaints/damage)
-        new BsonDocument("$match", new BsonDocument("status", new BsonDocument("$in", new BsonArray { "resolved" }))),
+                // 3. Consulta batch a PostgreSQL
+                var pgCommand = new NpgsqlCommand(
+                    $"SELECT user_id, nombre, apellido FROM users WHERE user_id IN ({string.Join(",", userIds)})",
+                    pgConnection);
 
-        // Lookup para datos del empleado (SQL_users)
-        new BsonDocument("$lookup", new BsonDocument
-        {
-            { "from", "SQL_users" },
-            { "localField", "reported_by" },
-            { "foreignField", "user_id" },
-            { "as", "empleado" }
-        }),
-        new BsonDocument("$unwind", "$empleado"),
+                using (var reader = pgCommand.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        userNames[reader.GetInt32(0)] = (reader.GetString(1), reader.GetString(2));
+                    }
+                }
+            }
 
-        // Lookup para datos de la compañía (companies)
-        new BsonDocument("$lookup", new BsonDocument
-        {
-            { "from", "companies" },
-            { "localField", "company_id" },
-            { "foreignField", "company_id" },
-            { "as", "company_info" }
-        }),
-        new BsonDocument("$unwind", "$company_info"),
+            // 4. Construir respuesta combinada
+            return incidents.Select(incident =>
+            {
+                var userId = incident["reported_by"].AsInt32;
+                var (nombre, apellido) = userNames.ContainsKey(userId) ? userNames[userId] : ("Desconocido", "");
 
-        // Proyección final (campos a devolver)
-        new BsonDocument("$project", new BsonDocument
+                return new BsonDocument
         {
-            { "_id", 0 },
-            { "incident_id", 1 },               // Nuevo campo
-            { "type", 1 },                     // Nuevo campo
-            { "container_id", 1 },
-            { "descripcion", "$description" },
-            { "fecha", "$created_at" },
-            { "imagen", new BsonDocument("$arrayElemAt", new BsonArray { "$images.url", 0 }) },
-            { "nombre_empleado", new BsonDocument("$concat", new BsonArray { "$empleado.nombre", " ", "$empleado.apellido" }) },
-            { "company_name", "$company_info.name" }  // Nombre en lugar del ID
-        })
-    };
-            return collection.Aggregate<BsonDocument>(pipeline).ToList();
+            { "incident_id", incident["incident_id"] },
+            { "type", incident["type"] },
+            { "container_id", incident["container_id"] },
+            { "description", incident["description"] },
+            { "created_at", incident["created_at"] },
+            { "nombre_empleado", $"{nombre} {apellido}" },
+            // ... otros campos
+        };
+            }).ToList();
         }
+
+
         // Consulta GraphicIncident (agrupación por mes/año)
         public static List<BsonDocument> GetGraphicIncident(IMongoDatabase db)
         {
