@@ -146,6 +146,51 @@ namespace smartbin.Models.SensorData
             var collection = MongoDbConnection.GetCollection<SensorData>("sensor_data");
             collection.InsertOne(this);
         }
+
+        public static List<BsonDocument> GetLatestReadingsPerDevice()
+        {
+            var collection = MongoDbConnection.GetCollection<BsonDocument>("sensor_data");
+
+            var pipeline = new[]
+            {
+        // Ordenar por device_id y timestamp (más reciente primero)
+        new BsonDocument("$sort", new BsonDocument
+        {
+            { "device_id", 1 },
+            { "timestamp", -1 }
+        }),
+        
+        // Agrupar por device_id y tomar el primer documento (el más reciente)
+        new BsonDocument("$group", new BsonDocument
+        {
+            { "_id", "$device_id" },
+            { "latest_doc", new BsonDocument("$first", "$$ROOT") }
+        }),
+        
+        // Reemplazar el _id por device_id y proyectar campos necesarios
+        new BsonDocument("$replaceRoot", new BsonDocument
+        {
+            { "newRoot", "$latest_doc" }
+        }),
+        
+        // Opcional: Filtrar campos sensibles (ej: alerts)
+        new BsonDocument("$project", new BsonDocument
+        {
+            { "_id", 0 },
+            { "device_id", 1 },
+            { "container_id", 1 },
+            { "timestamp", 1 },
+            { "readings.temperature", 1 },
+            { "readings.humidity", 1 },
+            { "readings.methane", 1 },
+            { "readings.co2", 1 },
+            { "readings.fill_level", 1 },
+            { "readings.battery_level", 1 }
+        })
+    };
+
+            return collection.Aggregate<BsonDocument>(pipeline).ToList();
+        }
     }
 
     public class Readings

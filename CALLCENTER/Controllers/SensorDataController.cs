@@ -14,6 +14,36 @@ namespace smartbin.Controllers
     [ApiController]
     public class SensorDataController : ControllerBase
     {
+        [HttpGet("latest")]
+        public ActionResult GetLatestReadings()
+        {
+            try
+            {
+                var results = SensorData.GetLatestReadingsPerDevice()
+                    .ConvertAll(doc => new
+                    {
+                        device_id = doc.GetValue("device_id", "").AsString,
+                        container_id = doc.GetValue("container_id", "").AsString,
+                        timestamp = doc.GetValue("timestamp", DateTime.MinValue).ToUniversalTime(),
+                        readings = new
+                        {
+                            temperature = doc["readings"].AsBsonDocument.GetValue("temperature", 0.0).AsDouble,
+                            humidity = doc["readings"].AsBsonDocument.GetValue("humidity", 0.0).AsDouble,
+                            methane = doc["readings"].AsBsonDocument.GetValue("methane", 0.0).AsDouble,
+                            co2 = doc["readings"].AsBsonDocument.GetValue("co2", 0.0).AsDouble,
+                            fill_level = doc["readings"].AsBsonDocument.GetValue("fill_level", 0.0).AsDouble,
+                            battery_level = doc["readings"].AsBsonDocument.GetValue("battery_level", 0.0).AsDouble
+                        }
+                    });
+
+                return Ok(new { status = 0, data = results });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = 1, message = ex.Message });
+            }
+        }
+
         [HttpPost]
         public ActionResult Insert([FromForm] PostSensorData postData)
         {
