@@ -1,0 +1,134 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <TinyGPSPlus.h>
+#include <HardwareSerial.h>
+#include <DHT.h>
+
+// ----- WIFI -----
+const char* ssid = "Mega_2.4G_4680";
+const char* password = "uxU6EH9x";
+
+// ----- API -----
+const char* serverUrl = "http://192.168.1.6:8080/api/sensores";
+
+// ----- Display -----
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// ----- GPS -----
+TinyGPSPlus gps;
+HardwareSerial GPS_Serial(1);
+
+// ----- Ultrasonico -----
+#define TRIG_PIN 14
+#define ECHO_PIN 27
+
+// ----- MQ -----
+#define MQ135_PIN  34
+#define MQ5_PIN 35
+
+// ----- DHT11 ---- -
+#define DHTPIN 4       // Pin de datos
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+void setup() {
+  Serial.begin(115200);
+
+  // GPS UART1
+  GPS_Serial.begin(9600, SERIAL_8N1, 16, 17);
+
+  // Pines sensores
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // Iniciar WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Conectando a WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println(" ¡Conectado!");
+
+  // Inicializar pantalla
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("Fallo en SSD1306");
+    while (true);
+  }
+
+  display.clearDisplay();
+
+  // Inicializar DHT
+  dht.begin();
+}
+
+void loop() {
+  // --- Lecturas ---
+  float mq135_value = analogRead(MQ135_PIN);
+  float mq5_value = analogRead(MQ5_PIN);
+  float distance = medirDistancia();
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+
+  // Leer GPS
+  while (GPS_Serial.available()) {
+    gps.encode(GPS_Serial.read());
+  }
+
+  float lat = gps.location.isValid() ? gps.location.lat() : 0.0;
+  float lng = gps.location.isValid() ? gps.location.lng() : 0.0;
+
+  // --- Mostrar en pantalla ---
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.printf("MQ135: %.0f\nMQ5: %.0f\nDist: %.1f cm\n", mq135_value, mq5_value, distance);
+  display.printf("Temp: %.1f C\nHum: %.1f %%\n", temp, hum);
+  display.printf("Lat: %.6f\nLng: %.6f", lat, lng);
+  display.display();
+
+  // --- Enviar datos ---
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(serverUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    String json = "{";
+    json += "\"lat\":" + String(lat, 6) + ",";
+    json += "\"lng\":" + String(lng, 6) + ",";
+    json += "\"mq135\":" + String(mq135_value) + ",";
+    json += "\"mq5\":" + String(mq5_value) + ",";
+    json += "\"distance\":" + String(distance) + ",";
+    json += "\"temp\":" + String(temp) + ",";
+    json += "\"humidity\":" + String(hum);
+    json += "}";
+
+    int httpResponseCode = http.POST(json);
+    if (httpResponseCode > 0) {
+      Serial.print("Respuesta HTTP: ");
+      Serial.println(httpResponseCode);
+    } else {
+      Serial.print("Error al enviar: ");
+      Serial.println(http.errorToString(httpResponseCode));
+    }
+    http.end();
+  }
+
+  delay(10000);
+}
+
+float medirDistancia() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duracion = pulseIn(ECHO_PIN, HIGH);
+  return duracion * 0.034 / 2;
+}
