@@ -1,0 +1,102 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const app = express();
+const port = 3000;
+
+app.use(express.json());
+
+// Conexión a MongoDB Atlas
+mongoose.connect("mongodb+srv://0323106040:tamaldepollo@cluster0.ztqajh0.mongodb.net/ESP32Pruebas?retryWrites=true&w=majority", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log(" Conectado a MongoDB Atlas");
+}).catch(err => {
+  console.error(" Error al conectar con MongoDB:", err);
+});
+
+// Esquema de datos con campo "alerts"
+const SensorDataSchema = new mongoose.Schema({
+  temperatura: Number,
+  humedad: Number,
+  metano: Number,
+  co2: Number,
+  nivel_llenado: Number,
+  ubicacion: {
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point'
+    },
+    coordinates: {
+      type: [Number],
+      index: '2dsphere'
+    }
+  },
+  alerts: [String],
+  timestamp: { type: Date, default: Date.now }
+});
+
+const SensorData = mongoose.model("SensorData", SensorDataSchema);
+
+// Ruta POST /gas
+app.post('/gas', async (req, res) => {
+  const {
+    temperatura,
+    humedad,
+    metano,
+    co2,
+    nivel_llenado,
+    ubicacion,
+    alerts
+  } = req.body;
+
+  // Validar ubicación tipo GeoJSON
+  let ubicacionGeoJSON;
+  if (ubicacion && Array.isArray(ubicacion.coordenadas) && ubicacion.coordenadas.length === 2) {
+    const [lng, lat] = ubicacion.coordenadas;
+    if (typeof lng === 'number' && typeof lat === 'number' && !isNaN(lng) && !isNaN(lat)) {
+      ubicacionGeoJSON = {
+        type: 'Point',
+        coordinates: [lng, lat]
+      };
+    }
+  }
+
+  console.log("📥 Datos recibidos:");
+  console.log(`  temperatura: ${temperatura}`);
+  console.log(`  humedad: ${humedad}`);
+  console.log(`  metano: ${metano}`);
+  console.log(`  co2: ${co2}`);
+  console.log(`  nivel_llenado: ${nivel_llenado}`);
+  console.log(`  alerts: ${Array.isArray(alerts) ? alerts.join(", ") : "ninguna"}`);
+  console.log(`  ubicación: ${ubicacionGeoJSON ? JSON.stringify(ubicacionGeoJSON) : "No válida o no enviada"}`);
+
+  try {
+    const dataToSave = {
+      temperatura,
+      humedad,
+      metano,
+      co2,
+      nivel_llenado,
+      alerts: Array.isArray(alerts) ? alerts : []
+    };
+
+    if (ubicacionGeoJSON) {
+      dataToSave.ubicacion = ubicacionGeoJSON;
+    }
+
+    const data = new SensorData(dataToSave);
+    await data.save();
+
+    res.status(200).send(" Datos guardados en MongoDB");
+  } catch (err) {
+    console.error(" Error al guardar datos:", err);
+    res.status(500).send("Error al guardar datos");
+  }
+});
+
+// Servidor en marcha
+app.listen(port, () => {
+  console.log(` Servidor escuchando en http://localhost:${port}`);
+});
